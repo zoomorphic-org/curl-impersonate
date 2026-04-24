@@ -262,6 +262,33 @@ jobs:
             rm -f libidn2.a libunistring.a
           fi
           rm -f libcurl-impersonate.orig.a
+
+          # ── Build shared library by rebuilding curl with --enable-shared ──
+          # The static build defines CURL_STATICLIB which bakes hidden
+          # visibility into .o files — macOS ld has no flag to override it.
+          # Rebuild curl with --enable-shared so its build system produces
+          # a .dylib/.so with properly exported symbols. Static deps are
+          # already built with -fPIC and get linked in automatically.
+          if [[ "${{ matrix.platform }}" != "ios" && "${{ matrix.platform }}" != "android" ]]; then
+            cd $GITHUB_WORKSPACE
+            ${{ matrix.make }} build-shared
+            case "${{ runner.os }}" in
+              macOS)
+                cp curl-8_15_0/lib/.libs/libcurl-impersonate*.dylib ${{ runner.temp }}/install/lib/
+                nm -gU ${{ runner.temp }}/install/lib/libcurl-impersonate.dylib | grep -q '_curl_easy_init' \
+                  || { echo "ERROR: curl symbols not exported"; exit 1; }
+                ;;
+              Linux)
+                cp curl-8_15_0/lib/.libs/libcurl-impersonate.so* ${{ runner.temp }}/install/lib/ 2>/dev/null || \
+                cp curl-8_15_0/lib/.libs/libcurl-impersonate*.so* ${{ runner.temp }}/install/lib/
+                shared_lib=$(ls ${{ runner.temp }}/install/lib/libcurl-impersonate*.so 2>/dev/null | head -1)
+                nm -D "$shared_lib" | grep -q 'curl_easy_init' \
+                  || { echo "ERROR: curl symbols not exported"; exit 1; }
+                ;;
+            esac
+            cd ${{ runner.temp }}/install/lib
+          fi
+
           ls -lah .
           if [[ "${{ startsWith(github.ref, 'refs/tags/') }}" == "true" ]]; then
             tar -c -z -f ${{ runner.temp }}/libcurl-impersonate-${{ github.ref_name }}.${{ matrix.host_label }}.tar.gz lib*

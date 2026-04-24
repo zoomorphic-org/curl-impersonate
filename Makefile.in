@@ -531,3 +531,76 @@ $(CURL_VERSION)/.chrome: $(chrome_libs)	$(CURL_VERSION).tar.gz $(CURL_VERSION)/.
 	# Remove possible leftovers from a previous compilation
 	$(MAKE) clean MAKEFLAGS=
 	touch .chrome
+
+# Rebuild curl as a shared library (.dylib / .so) with exported symbols.
+# Must be run after 'build' — reuses the same deps and patched source.
+build-shared: $(CURL_VERSION)/.chrome
+	cd $(CURL_VERSION)
+	# Reconfigure without --enable-static --disable-shared so that
+	# CURL_STATICLIB is NOT defined and symbols get proper visibility.
+	{ \
+	  config_flags="--prefix=@prefix@"; \
+	  config_flags="$$config_flags --with-brotli=$(brotli_install_dir)"; \
+	  config_flags="$$config_flags --with-nghttp2=$(nghttp2_install_dir)"; \
+	  config_flags="$$config_flags --with-ngtcp2=$(ngtcp2_install_dir)"; \
+	  config_flags="$$config_flags --with-nghttp3=$(nghttp3_install_dir)"; \
+	  case "$(host_os)" in \
+	    darwin*|ios*|tvos*|watchos*) \
+	      config_flags="$$config_flags --with-apple-idn --without-libidn2"; \
+	      ;; \
+	    *android*) \
+	      config_flags="$$config_flags --without-libidn2"; \
+	      ;; \
+	    *) \
+	      config_flags="$$config_flags --with-libidn2=$(libidn2_install_dir)"; \
+	      ;; \
+	  esac; \
+	  config_flags="$$config_flags --with-openssl=$(boringssl_dir)"; \
+	  config_flags="$$config_flags --with-zlib=$(with_zlib)"; \
+	  config_flags="$$config_flags --with-zstd=$(with_zstd)"; \
+	  config_flags="$$config_flags --without-librtmp"; \
+	  config_flags="$$config_flags --disable-ldap --disable-ldaps"; \
+	  config_flags="$$config_flags --without-libpsl"; \
+	  config_flags="$$config_flags --enable-websockets"; \
+	  config_flags="$$config_flags --enable-ech"; \
+	  config_flags="$$config_flags --enable-ssls-export"; \
+	  config_flags="$$config_flags --enable-ipv6"; \
+	  config_flags="$$config_flags USE_CURL_SSLKEYLOGFILE=true"; \
+	  config_flags="$$config_flags --enable-shared --disable-static"; \
+	  if test -n "$(host_alias)"; then \
+	    config_flags="$$config_flags --host=$(host_alias)"; \
+	  fi; \
+	  if test -n "$(with_ca_bundle)"; then \
+	    config_flags="$$config_flags --with-ca-bundle=$(with_ca_bundle)"; \
+	  fi; \
+	  if test -n "$(with_ca_path)"; then \
+	    config_flags="$$config_flags --with-ca-path=$(with_ca_path)"; \
+	  fi; \
+	  case "$(host_os)" in \
+	    darwin*|ios*|tvos*|watchos*) add_libs="-pthread -lc++" ;; \
+	    *android*) add_libs="-pthread -lc++" ;; \
+	    *) add_libs="-pthread -lstdc++ -L$(libunistring_install_dir)/lib -lunistring" ;; \
+	  esac; \
+	}
+
+	{ \
+		lib_path="$(nghttp2_install_dir)/lib:$(ngtcp2_install_dir)/lib:$(nghttp3_install_dir)/lib:$(zstd_install_dir)/lib:$(zlib_install_dir)/lib:$(brotli_install_dir)/lib"; \
+		case "$(host_os)" in \
+		  darwin*|ios*|tvos*|watchos*) ;; \
+		  *android*) ;; \
+		  *) lib_path="$$lib_path:$(libidn2_install_dir)/lib:$(libunistring_install_dir)/lib" ;; \
+		esac; \
+	}
+
+	DYLD_LIBRARY_PATH="$$lib_path" \
+	LD_LIBRARY_PATH="$$lib_path" \
+	PKG_CONFIG_LIBDIR= \
+	PKG_CONFIG_PATH="$(ngtcp2_install_dir)/lib/pkgconfig" \
+		./configure \
+			 $$config_flags \
+			 LIBS="$$add_libs"
+
+	# Purge .o files compiled with CURL_STATICLIB (hidden visibility).
+	$(MAKE) -C lib clean MAKEFLAGS=
+	$(MAKE) -C lib MAKEFLAGS=-j$(SUBJOBS)
+.PHONY: build-shared
